@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 from typing import Any
 
 import ollama
@@ -8,7 +9,8 @@ from telegram.ext import ContextTypes
 
 from auth import require_allowed_callback, require_allowed_user
 from bot_tools import OLLAMA_TOOLS, execute_tool
-from config import INCLUDE_THINKING
+from config import INCLUDE_THINKING, PROJECTS
+from projects import SELECTED_PROJECT_KEY, effective_tools_root
 from ollama_helper import format_completion_models_list, get_completion_models
 from ollama_state import (
     OLLAMA_INVOKE_IN_TURN_KEY,
@@ -163,7 +165,7 @@ async def tool_permission_callback(
     approved = query.data == CALLBACK_TOOL_YES
     if approved:
         try:
-            content = execute_tool(name, arguments)
+            content = execute_tool(name, arguments, effective_tools_root(context))
         except Exception as exc:
             content = json.dumps({"error": str(exc)}, ensure_ascii=False)
     else:
@@ -216,10 +218,14 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/set_model <имя> — выбрать локальную модель\n"
         "/list_models — список доступных локальных моделей\n"
         "/message_count — сколько сообщений в истории диалога\n"
+        "/list_projects — список настроенных проектов и текущий выбор\n"
+        "/set_project <имя> — работать с файлами в папке этого проекта\n"
+        "/clear_project — сбросить выбор проекта (корень по умолчанию)\n"
         "/exit — остановить бота и завершить программу\n\n"
         "Любое текстовое сообщение (не команда) отправляется в модель как продолжение диалога.\n\n"
-        "Если модель вызывает инструмент (например список файлов в папке), бот спросит у вас "
-        "разрешение и покажет имя функции и аргументы."
+        "Если модель вызывает инструмент (список файлов, чтение/запись файла и т.д.), бот спросит у вас "
+        "разрешение и покажет имя функции и аргументы. Пути в инструментах задаются относительно папки "
+        "текущего проекта (см. /set_project)."
     )
 
 
@@ -263,3 +269,56 @@ async def cmd_set_model(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
     context.user_data[OLLAMA_MODEL_KEY] = name
     await update.message.reply_text(f"Модель установлена: {name}")
+
+
+@require_allowed_user
+async def cmd_list_projects(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    current = context.user_data.get(SELECTED_PROJECT_KEY)
+    root = effective_tools_root(context)
+    lines = [
+        f"Текущий корень для инструментов: {root}",
+        f"Выбранный проект: {current if current else '(не выбран, используется корень по умолчанию)'}",
+        "",
+        "Проекты из настройки PROJECTS:",
+    ]
+    if not PROJECTS:
+        lines.append("  (словарь PROJECTS пуст — добавьте имена и пути в config.py)")
+    else:
+        for pname, ppath in sorted(PROJECTS.items()):
+            mark = " ← текущий" if pname == current else ""
+            lines.append(f"  • {pname} → {ppath}{mark}")
+    await update.message.reply_text("\n".join(lines))
+
+
+@require_allowed_user
+async def cmd_set_project(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not context.args:
+        await update.message.reply_text(
+            "Укажите имя проекта из настройки PROJECTS, например:\n"
+            "/set_project my_app\n\n"
+            "Список проектов: /list_projects\n"
+            "Сброс: /clear_project"
+        )
+        return
+    name = " ".join(context.args).strip()
+    if name not in PROJECTS:
+        await update.message.reply_text(
+            f"Проект «{name}» не найден в PROJECTS. См. /list_projects"
+        )
+        return
+    proj_path = Path(PROJECTS[name]).resolve()
+    if not proj_path.is_dir():
+        await update.message.reply_text(
+            f"Папка проекта не существует или не является каталогом:\n{proj_path}"
+        )
+        return
+    context.user_data[SELECTED_PROJECT_KEY] = name
+    await update.message.reply_text(f"Активный проект: {name}\nКорень: {proj_path}")
+
+
+@require_allowed_user
+async def cmd_clear_project(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    context.user_data[SELECTED_PROJECT_KEY] = None
+    await update.message.reply_text(
+        f"Выбор проекта сброшен. Корень инструментов: {effective_tools_root(context)}"
+    )

@@ -5,13 +5,16 @@ from handlers import (
     CALLBACK_TOOL_NO,
     CALLBACK_TOOL_YES,
     chat,
+    cmd_clear_project,
     cmd_exit,
     cmd_get_model,
     cmd_help,
     cmd_list_models,
+    cmd_list_projects,
     cmd_message_count,
     cmd_new_chat,
     cmd_set_model,
+    cmd_set_project,
     cmd_start,
     tool_permission_callback,
 )
@@ -26,6 +29,9 @@ def main() -> None:
     app.add_handler(CommandHandler("set_model", cmd_set_model))
     app.add_handler(CommandHandler("list_models", cmd_list_models))
     app.add_handler(CommandHandler("message_count", cmd_message_count))
+    app.add_handler(CommandHandler("list_projects", cmd_list_projects))
+    app.add_handler(CommandHandler("set_project", cmd_set_project))
+    app.add_handler(CommandHandler("clear_project", cmd_clear_project))
     app.add_handler(CommandHandler("exit", cmd_exit))
     app.add_handler(
         CallbackQueryHandler(

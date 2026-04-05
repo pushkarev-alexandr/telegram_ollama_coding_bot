@@ -12,6 +12,12 @@ INCLUDE_THINKING = False
 
 DEFAULT_MODEL = "llama3.2"
 
-# Корень для инструмента list_directory_contents (абсолютный путь). По умолчанию — каталог проекта.
+# Корень для инструментов, если проект не выбран (абсолютный путь). По умолчанию — каталог этого файла.
 TOOLS_ROOT = os.getenv("TOOLS_ROOT") or os.path.dirname(os.path.abspath(__file__))
+
+# Имена проектов и абсолютные пути к их папкам. После /set_project <имя> все инструменты работают внутри этой папки.
+PROJECTS: dict[str, str] = {
+    # "my_app": r"C:\path\to\my_app",
+    # "other": "/home/user/projects/other",
+}
 
