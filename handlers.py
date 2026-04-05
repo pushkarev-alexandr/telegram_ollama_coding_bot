@@ -200,6 +200,12 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 @require_allowed_user
+async def cmd_exit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text("Прощай")
+    context.application.stop_running()
+
+
+@require_allowed_user
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         "Команды:\n"
@@ -209,7 +215,8 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/get_model — показать текущую модель Ollama\n"
         "/set_model <имя> — выбрать локальную модель\n"
         "/list_models — список доступных локальных моделей\n"
-        "/message_count — сколько сообщений в истории диалога\n\n"
+        "/message_count — сколько сообщений в истории диалога\n"
+        "/exit — остановить бота и завершить программу\n\n"
         "Любое текстовое сообщение (не команда) отправляется в модель как продолжение диалога.\n\n"
         "Если модель вызывает инструмент (например список файлов в папке), бот спросит у вас "
         "разрешение и покажет имя функции и аргументы."

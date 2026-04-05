@@ -5,6 +5,7 @@ from handlers import (
     CALLBACK_TOOL_NO,
     CALLBACK_TOOL_YES,
     chat,
+    cmd_exit,
     cmd_get_model,
     cmd_help,
     cmd_list_models,
@@ -25,6 +26,7 @@ def main() -> None:
     app.add_handler(CommandHandler("set_model", cmd_set_model))
     app.add_handler(CommandHandler("list_models", cmd_list_models))
     app.add_handler(CommandHandler("message_count", cmd_message_count))
+    app.add_handler(CommandHandler("exit", cmd_exit))
     app.add_handler(
         CallbackQueryHandler(
             tool_permission_callback,
