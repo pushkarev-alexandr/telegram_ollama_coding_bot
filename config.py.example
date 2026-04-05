@@ -1,0 +1,14 @@
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+TELEGRAM_BOT_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
+PROXY_URL = "socks5://YOUR_PROXY_IP:YOUR_PROXY_PORT"
+ALLOWED_USER_IDS = ["YOUR_USER_ID"]
+OLLAMA_HOST = os.getenv("OLLAMA_HOST")
+
+INCLUDE_THINKING = False
+
+DEFAULT_MODEL = "llama3.2"
+
