@@ -1,14 +1,197 @@
-from telegram import Update
+import json
+from typing import Any
+
+import ollama
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ChatAction
 from telegram.ext import ContextTypes
 
-import ollama
-
-from auth import require_allowed_user
+from auth import require_allowed_callback, require_allowed_user
+from bot_tools import OLLAMA_TOOLS, execute_tool
 from config import INCLUDE_THINKING
 from ollama_helper import format_completion_models_list, get_completion_models
-from ollama_state import OLLAMA_MESSAGES_KEY, OLLAMA_MODEL_KEY, effective_messages, effective_model
+from ollama_state import (
+    OLLAMA_INVOKE_IN_TURN_KEY,
+    OLLAMA_MESSAGES_KEY,
+    OLLAMA_MODEL_KEY,
+    PENDING_TOOLS_KEY,
+    effective_messages,
+    effective_model,
+)
 from telegram_reply import reply_markdown_or_plain
+
+MAX_TOOL_ROUNDS = 15
+
+CALLBACK_TOOL_YES = "tool_yes"
+CALLBACK_TOOL_NO = "tool_no"
+
+
+def _tool_calls_payload(message: ollama.Message) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for tc in message.tool_calls or []:
+        fn = tc.function
+        out.append(
+            {
+                "name": fn.name,
+                "arguments": dict(fn.arguments),
+            }
+        )
+    return out
+
+
+def _format_tool_prompt(name: str, arguments: dict[str, Any]) -> str:
+    args_text = json.dumps(arguments, ensure_ascii=False, indent=2)
+    return (
+        "Модель запросила выполнение функции.\n\n"
+        f"Имя функции: {name}\n\n"
+        f"Аргументы:\n```json\n{args_text}\n```\n\n"
+        "Разрешить выполнение?"
+    )
+
+
+async def _send_tool_permission_request(
+    update: Update, context: ContextTypes.DEFAULT_TYPE, name: str, arguments: dict[str, Any]
+) -> None:
+    text = _format_tool_prompt(name, arguments)
+    kb = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("Разрешить", callback_data=CALLBACK_TOOL_YES),
+                InlineKeyboardButton("Отклонить", callback_data=CALLBACK_TOOL_NO),
+            ]
+        ]
+    )
+    msg = update.effective_message
+    if msg:
+        await msg.reply_text(text, reply_markup=kb)
+
+
+async def _reply_final_assistant(
+    update: Update, message: ollama.Message
+) -> None:
+    if INCLUDE_THINKING and message.thinking:
+        text = f"Thinking:\n{message.thinking}\n\nContent:\n{message.content or ''}"
+    else:
+        text = message.content or ""
+    await reply_markdown_or_plain(update, text)
+
+
+async def _run_ollama_after_tools_resolved(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """После добавления всех tool-сообщений — следующий вызов модели (возможны новые tool_calls)."""
+    n = context.user_data.get(OLLAMA_INVOKE_IN_TURN_KEY, 0) + 1
+    context.user_data[OLLAMA_INVOKE_IN_TURN_KEY] = n
+    if n > MAX_TOOL_ROUNDS:
+        em = update.effective_message
+        if em:
+            await em.reply_text(
+                "Достигнут лимит вызовов модели с инструментами в этом ответе."
+            )
+        return
+
+    await context.bot.send_chat_action(
+        chat_id=update.effective_chat.id,
+        action=ChatAction.TYPING,
+    )
+    response = ollama.chat(
+        model=effective_model(context),
+        messages=effective_messages(context),
+        tools=OLLAMA_TOOLS,
+    )
+    assistant = response.message
+    effective_messages(context).append(assistant)
+
+    if not assistant.tool_calls:
+        await _reply_final_assistant(update, assistant)
+        return
+
+    calls = _tool_calls_payload(assistant)
+    context.user_data[PENDING_TOOLS_KEY] = {
+        "calls": calls,
+        "index": 0,
+    }
+    if assistant.content:
+        await reply_markdown_or_plain(update, assistant.content)
+    first = calls[0]
+    await _send_tool_permission_request(
+        update, context, first["name"], first["arguments"]
+    )
+
+
+@require_allowed_user
+async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if context.user_data.get(PENDING_TOOLS_KEY):
+        await update.message.reply_text(
+            "Сначала ответьте на запрос разрешения инструмента (кнопки в сообщении выше)."
+        )
+        return
+
+    await context.bot.send_chat_action(
+        chat_id=update.effective_chat.id,
+        action=ChatAction.TYPING,
+    )
+    context.user_data[OLLAMA_INVOKE_IN_TURN_KEY] = 0
+    effective_messages(context).append(
+        ollama.Message(role="user", content=update.message.text)
+    )
+    await _run_ollama_after_tools_resolved(update, context)
+
+
+@require_allowed_callback
+async def tool_permission_callback(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    query = update.callback_query
+    await query.answer()
+    pending = context.user_data.get(PENDING_TOOLS_KEY)
+    if not pending:
+        await query.edit_message_reply_markup(reply_markup=None)
+        return
+
+    calls: list[dict[str, Any]] = pending["calls"]
+    idx: int = pending["index"]
+    if idx >= len(calls):
+        context.user_data[PENDING_TOOLS_KEY] = None
+        await query.edit_message_reply_markup(reply_markup=None)
+        return
+
+    current = calls[idx]
+    name = current["name"]
+    arguments = current["arguments"]
+
+    approved = query.data == CALLBACK_TOOL_YES
+    if approved:
+        try:
+            content = execute_tool(name, arguments)
+        except Exception as exc:
+            content = json.dumps({"error": str(exc)}, ensure_ascii=False)
+    else:
+        content = json.dumps(
+            {
+                "denied": True,
+                "message": "Пользователь отклонил выполнение этой функции.",
+            },
+            ensure_ascii=False,
+        )
+
+    effective_messages(context).append(
+        ollama.Message(role="tool", content=content, tool_name=name)
+    )
+    idx += 1
+    pending["index"] = idx
+
+    await query.edit_message_reply_markup(reply_markup=None)
+
+    if idx < len(calls):
+        nxt = calls[idx]
+        await _send_tool_permission_request(
+            update, context, nxt["name"], nxt["arguments"]
+        )
+        return
+
+    context.user_data[PENDING_TOOLS_KEY] = None
+    await _run_ollama_after_tools_resolved(update, context)
 
 
 @require_allowed_user
@@ -27,32 +210,18 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/set_model <имя> — выбрать локальную модель\n"
         "/list_models — список доступных локальных моделей\n"
         "/message_count — сколько сообщений в истории диалога\n\n"
-        "Любое текстовое сообщение (не команда) отправляется в модель как продолжение диалога."
+        "Любое текстовое сообщение (не команда) отправляется в модель как продолжение диалога.\n\n"
+        "Если модель вызывает инструмент (например список файлов в папке), бот спросит у вас "
+        "разрешение и покажет имя функции и аргументы."
     )
 
 
 @require_allowed_user
 async def cmd_new_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     context.user_data[OLLAMA_MESSAGES_KEY] = []
+    context.user_data[PENDING_TOOLS_KEY] = None
+    context.user_data[OLLAMA_INVOKE_IN_TURN_KEY] = 0
     await update.message.reply_text("История диалога сброшена.")
-
-
-@require_allowed_user
-async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await context.bot.send_chat_action(
-        chat_id=update.effective_chat.id,
-        action=ChatAction.TYPING,
-    )
-    effective_messages(context).append(ollama.Message(role="user", content=update.message.text))
-    response = ollama.chat(model=effective_model(context), messages=effective_messages(context))
-    if INCLUDE_THINKING and response.message.thinking:
-        await reply_markdown_or_plain(
-            update,
-            f"Thinking:\n{response.message.thinking}\n\nContent:\n{response.message.content}",
-        )
-    else:
-        await reply_markdown_or_plain(update, response.message.content)
-    effective_messages(context).append(response.message)
 
 
 @require_allowed_user
@@ -87,4 +256,3 @@ async def cmd_set_model(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
     context.user_data[OLLAMA_MODEL_KEY] = name
     await update.message.reply_text(f"Модель установлена: {name}")
-

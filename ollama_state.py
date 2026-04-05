@@ -7,6 +7,10 @@ from ollama_helper import get_least_params_model, is_valid_completion_model
 
 OLLAMA_MESSAGES_KEY = "ollama_messages"
 OLLAMA_MODEL_KEY = "ollama_model"
+# Ожидание ответа по inline-кнопкам для вызова инструмента моделью
+PENDING_TOOLS_KEY = "pending_tools"
+# Счётчик вызовов ollama.chat за один ответ пользователя (лимит цепочки tool → модель)
+OLLAMA_INVOKE_IN_TURN_KEY = "ollama_invoke_in_turn"
 
 
 def effective_model(context: ContextTypes.DEFAULT_TYPE) -> str:

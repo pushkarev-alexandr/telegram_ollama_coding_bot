@@ -1,7 +1,9 @@
-from telegram.ext import Application, CommandHandler, MessageHandler, filters
+from telegram.ext import Application, CallbackQueryHandler, CommandHandler, MessageHandler, filters
 
 from config import PROXY_URL, TELEGRAM_BOT_TOKEN
 from handlers import (
+    CALLBACK_TOOL_NO,
+    CALLBACK_TOOL_YES,
     chat,
     cmd_get_model,
     cmd_help,
@@ -10,6 +12,7 @@ from handlers import (
     cmd_new_chat,
     cmd_set_model,
     cmd_start,
+    tool_permission_callback,
 )
 
 
@@ -22,6 +25,12 @@ def main() -> None:
     app.add_handler(CommandHandler("set_model", cmd_set_model))
     app.add_handler(CommandHandler("list_models", cmd_list_models))
     app.add_handler(CommandHandler("message_count", cmd_message_count))
+    app.add_handler(
+        CallbackQueryHandler(
+            tool_permission_callback,
+            pattern=f"^({CALLBACK_TOOL_YES}|{CALLBACK_TOOL_NO})$",
+        )
+    )
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
     print("Бот запущен, нажмите Ctrl+C для выхода")
     app.run_polling()

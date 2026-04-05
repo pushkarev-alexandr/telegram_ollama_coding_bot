@@ -25,3 +25,21 @@ def require_allowed_user(
         await handler(update, context)
 
     return wrapped
+
+
+def require_allowed_callback(
+    handler: Callable[[Update, ContextTypes.DEFAULT_TYPE], Awaitable[None]],
+) -> Callable[[Update, ContextTypes.DEFAULT_TYPE], Awaitable[None]]:
+    """Как require_allowed_user, но для callback_query (нажатия кнопок)."""
+
+    @wraps(handler)
+    async def wrapped(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        u = update.effective_user
+        q = update.callback_query
+        if not u or u.id not in ALLOWED_USER_IDS:
+            if q:
+                await q.answer("У вас нет доступа к боту.", show_alert=True)
+            return
+        await handler(update, context)
+
+    return wrapped
