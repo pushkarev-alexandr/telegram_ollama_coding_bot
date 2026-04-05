@@ -8,6 +8,7 @@ from auth import require_allowed_user
 from config import INCLUDE_THINKING
 from ollama_helper import format_completion_models_list, get_completion_models
 from ollama_state import OLLAMA_MESSAGES_KEY, OLLAMA_MODEL_KEY, effective_messages, effective_model
+from telegram_reply import reply_markdown_or_plain
 
 
 @require_allowed_user
@@ -45,11 +46,12 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     effective_messages(context).append(ollama.Message(role="user", content=update.message.text))
     response = ollama.chat(model=effective_model(context), messages=effective_messages(context))
     if INCLUDE_THINKING and response.message.thinking:
-        await update.message.reply_markdown(
-            f"Thinking:\n{response.message.thinking}\n\nContent:\n{response.message.content}"
+        await reply_markdown_or_plain(
+            update,
+            f"Thinking:\n{response.message.thinking}\n\nContent:\n{response.message.content}",
         )
     else:
-        await update.message.reply_markdown(response.message.content)
+        await reply_markdown_or_plain(update, response.message.content)
     effective_messages(context).append(response.message)
 
 
