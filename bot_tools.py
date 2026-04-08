@@ -71,6 +71,54 @@ def read_file_text(path: str, root: Path) -> dict:
     return {"path": str(target), "content": content}
 
 
+def replace_in_file(path: str, old_text: str, new_text: str, root: Path) -> dict:
+    """
+    Заменяет ровно одно вхождение old_text на new_text в существующем UTF-8 файле.
+
+    old_text должен встречаться в файле ровно один раз (иначе правка отклоняется).
+    """
+    if not old_text:
+        return {"error": "old_text не может быть пустым."}
+    target = _safe_path_under_root(path, root)
+    if not target.exists():
+        return {"error": f"Файл не существует: {path}"}
+    if not target.is_file():
+        return {"error": f"Не является файлом: {path}"}
+    try:
+        size = target.stat().st_size
+        if size > MAX_READ_BYTES:
+            return {
+                "error": (
+                    f"Файл слишком большой ({size} байт), лимит {MAX_READ_BYTES} байт."
+                )
+            }
+        content = target.read_text(encoding="utf-8", errors="replace")
+    except OSError as e:
+        return {"error": str(e)}
+
+    n = content.count(old_text)
+    if n == 0:
+        return {"error": "Фрагмент old_text в файле не найден. Проверьте совпадение с read_file_text."}
+    if n > 1:
+        return {
+            "error": (
+                f"Фрагмент old_text встречается {n} раз; нужно ровно одно вхождение. "
+                "Расширьте old_text (контекст до/после), чтобы он стал уникальным."
+            )
+        }
+
+    new_content = content.replace(old_text, new_text, 1)
+    try:
+        target.write_text(new_content, encoding="utf-8", newline="")
+    except OSError as e:
+        return {"error": str(e)}
+    return {
+        "path": str(target),
+        "replaced": True,
+        "bytes": len(new_content.encode("utf-8")),
+    }
+
+
 def write_file_text(path: str, content: str, root: Path) -> dict:
     """Записывает текст в файл UTF-8; родительские папки создаются при необходимости."""
     target = _safe_path_under_root(path, root)
@@ -116,6 +164,19 @@ def execute_tool(name: str, arguments: dict, root: Path) -> str:
         if not isinstance(content, str):
             content = str(content)
         result = write_file_text(raw_path, content, root)
+        return json.dumps(result, ensure_ascii=False)
+
+    if name == "replace_in_file":
+        raw_path = arguments.get("path", "")
+        if not isinstance(raw_path, str):
+            raw_path = str(raw_path)
+        old_text = arguments.get("old_text", "")
+        if not isinstance(old_text, str):
+            old_text = str(old_text)
+        new_text = arguments.get("new_text", "")
+        if not isinstance(new_text, str):
+            new_text = str(new_text)
+        result = replace_in_file(raw_path, old_text, new_text, root)
         return json.dumps(result, ensure_ascii=False)
 
     if name == "create_directory":
@@ -176,9 +237,42 @@ OLLAMA_TOOLS: list[dict] = [
     {
         "type": "function",
         "function": {
+            "name": "replace_in_file",
+            "description": (
+                "Точечная правка существующего файла: заменяет один уникальный фрагмент old_text на new_text. "
+                "Сначала обязательно прочитай файл через read_file_text и скопируй old_text без изменений "
+                "(переносы строк, пробелы, отступы). Для новых файлов или полной перезаписи используй write_file_text."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Относительный путь к существующему файлу.",
+                    },
+                    "old_text": {
+                        "type": "string",
+                        "description": (
+                            "Подстрока из файла, которая должна встретиться ровно один раз; "
+                            "должна совпадать с фактическим содержимым байт-в-байт."
+                        ),
+                    },
+                    "new_text": {
+                        "type": "string",
+                        "description": "Текст, которым заменяется old_text (может быть пустым для удаления фрагмента).",
+                    },
+                },
+                "required": ["path", "old_text", "new_text"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "write_file_text",
             "description": (
-                "Записывает текст в файл (UTF-8) по относительному пути; при необходимости создаёт недостающие папки."
+                "Полностью перезаписывает файл (UTF-8); при необходимости создаёт недостающие папки. "
+                "Для правок в уже существующих файлах предпочитай replace_in_file."
             ),
             "parameters": {
                 "type": "object",
